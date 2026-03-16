@@ -9,17 +9,18 @@ Our proposed approach of our experiments and our research questions:
 
 We use this repository to answer following research questions:
 
-RQ1: How does each type of perturbation in training data affect models’ robustness?
+RQ1: Do LLM4Code models consistently achieve better performance when using Chain-of-Thought (CoT)?
 
-RQ2: How does the perturbation ratio affect models’ robustness?
+RQ2: Does CoT improve the robustness of LLM4Code models under perturbed prompts?
 
-RQ3: How does the size of perturbed training data affect models’ robustness?
+RQ3: Is early-stage uncertainty in the generation process predictive of final code-generation failure?
+
+RQ4: How do input perturbations affect the structure of CoT reasoning trajectories?
 
 ## Setup
 First, install Python dependencies:
 ```console
 pip install -r requirements.txt
-pip install -e .
 ```
 
 ## Training

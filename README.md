@@ -27,25 +27,24 @@ cd CodeGeeX
 pip install -e .
 ```
 
-## Training
-Run the following command to fine-tune an pretrained LLM with SafeCoder:
-```console
-python train.py --pretrain_name starcoderbase-1b --output_name starcoderbase-1b-safecoder --datasets evol
-```
-Here, `--pretrain_name` specifies the base pretrained LLM, `--output_name` denotes the user-provided name of the fine-tuned model, and `--datasets` represents a list of datasets used for training (see [the datasets section](#datasets) for more details). 
-
 ## Evaluation
 we consider the following benchmarks:
 ```console
-# HumanEval, with temperature 0.2
-./func_eval.sh human_eval starcoderbase-1b-safecoder-0.2 starcoderbase-1b-safecoder 0.2
-python print_results.py --eval_name starcoderbase-1b-safecoder-0.2 --eval_type human_eval
+# Qwen, MHPP, nocot
+python ./src/programmer_mhpp.py \
+  --model_path Qwen/Qwen2.5-Coder-7B-Instruct\
+  --dataset_file ./src/dataset/MHPP.jsonl \
+  --prompt_path ./prompts/mhpp_prompt_nocot.txt \
+  --run_tag nocot
 
-# MBPP, with temperature 0.2
-./func_eval.sh mbpp starcoderbase-1b-safecoder-0.2 starcoderbase-1b-safecoder 0.2
-python print_results.py --eval_name starcoderbase-1b-safecoder-0.2 --eval_type mbpp
+# Qwen, MHPP, cot
+python ./src/programmer_mhpp.py \
+  --model_path Qwen/Qwen2.5-Coder-7B-Instruct\
+  --dataset_file ./src/dataset/MHPP.jsonl \
+  --prompt_path ./prompts/mhpp_prompt_cot.txt \
+  --run_tag cot
 ```
 
 ## Datasets
-This dataset contains the unperturbed training dataset [`evol`](data_train_val/train/evol.jsonl) and 32 perturbed datasets is constructed within this work. (see [Section 4 in our paper] for more details).
+This dataset contains the unperturbed datasets [`MHPP`](src/dataset/MHPP.jsonl), [`BCB`](src/dataset/BCB.jsonl) and 14 perturbed datasets are constructed within this work. (see [Section 4 in our paper] for more details).
 

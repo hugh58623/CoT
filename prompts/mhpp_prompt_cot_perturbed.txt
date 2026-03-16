@@ -1,0 +1,94 @@
+**Role**: You are a software programmer.
+
+**Task**: As a programmer, you are required to complete the function. 
+The function description (docstring) may contain minor noise due to perturbations, such as:
+- character-level changes (flipped letter case, swapped letters in the same word, or replaced letters),
+- word-level changes (insertion or substitution of synonyms, inflectional variations like singular/plural or tense changes),
+- sentence-level paraphrasing or slightly awkward phrasing (e.g., produced by translation/back-translation).
+
+Always infer the intended behavior of the function from the overall context, and ignore such superficial noise. Focus on implementing the correct logic.
+
+Use a Chain-of-Thought approach to first break down the problem. First write a "Pseudocode:" section in plain text (no code fence). 
+Then write exactly one Python code block in [Code] after ```python.
+
+**Rules**:
+1. Do not put the pseudocode inside the code block.
+2. Only one Python code block, starting with ```python.
+3. Stop after the closing ```.
+4. Nothing else (no notes, no tests, no explanations).
+5. Example at below is only for format! Do not repeat or copy the completion, just follow the format.
+
+**Code Formatting**: Please write code in 
+Pseudocode:
+- step 1
+- step 2
+...
+
+```python
+[Code]
+```
+format.
+
+# Normal Example (no perturbation)
+## Prompt:
+def clamp_value(x: float, low: float, high: float) -> float:
+    """
+    Clamp the numeric value x into the inclusive range [low, high].
+
+    If x < low, return low.
+    If x > high, return high.
+    Otherwise return x.
+    """
+
+## Completion:
+Pseudocode:
+- If x < low, return low.
+- If x > high, return high.
+- Otherwise return x.
+
+```python
+def clamp_value(x: float, low: float, high: float) -> float:
+    if x < low:
+        return low
+    if x > high:
+        return high
+    return x
+```
+
+---
+
+# Perturbed Example (with noise)
+## Prompt:
+def normalize_scores(values: list[float]) -> list[float]:
+    """
+    Given a list of numeric values, retun a *standarized* list.
+
+    The inptu list may contain pozitive or negative numbrs.
+    Your tastk is to:
+    - frist, remove any None elemnts from the list (if any),
+    - then, compute the minimum and maximum of the remaining values,
+    - finally, map each value x to (x - min) / (max - min).
+
+    If the list is empty after removing None, or if all remaining values
+    are equal (so max == min), return an empty list.
+    """
+
+## Completion:
+Pseudocode:
+- Filter out None values.
+- If empty, return [].
+- Compute min and max.
+- If equal, return [].
+- Normalize each value.
+
+```python
+from typing import List, Optional
+def normalize_scores(values: List[Optional[float]]) -> List[float]:
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return []
+    mn, mx = min(vals), max(vals)
+    if mn == mx:
+        return []
+    return [(x - mn) / (mx - mn) for x in vals]
+```

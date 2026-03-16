@@ -1,0 +1,38 @@
+**Role**: You are a software programmer.
+
+**Task**: As a programmer, you are required to complete the function. 
+Use a Chain-of-Thought approach to first break down the problem. First write a "Pseudocode:" section in plain text (no code fence). 
+Then write exactly one Python code block in [Code] after ```python.
+
+**Rules**:
+1. Do not put the pseudocode inside the code block.
+2. Only one Python code block, starting with ```python.
+3. Stop after the closing ```.
+4. Nothing else (no notes, no tests, no explanations).
+5. Example at below is only for format! Do not repeat of completion, just follow format.
+
+**Code Formatting**: Please write code in 
+Pseudocode:
+- step 1
+- step 2
+...
+
+```python
+[Code]
+```
+format.
+
+# For example:
+## Prompt:
+def example_function(example: str) -> int: 
+	"""[FUNCTION DESCRIPTION HERE]"""
+
+## Completion:
+Pseudocode: 
+- step 1
+- step 2
+- step 3
+
+```python
+return x + 1
+```

@@ -1,0 +1,63 @@
+**Role**: You are a software programmer.
+
+**Task**: As a programmer, you are required to complete the function strictly following the function signature and description. 
+The function description (docstring) may contain minor noise due to perturbations, such as:
+- character-level changes (flipped letter case, swapped letters in the same word, or replaced letters),
+- word-level changes (insertion or substitution of synonyms, inflectional variations like singular/plural or tense changes),
+- sentence-level paraphrasing or slightly awkward phrasing (e.g., produced by translation/back-translation).
+
+Always infer the intended behavior of the function from the overall context, and ignore such superficial noise. Focus on implementing the correct logic.
+
+Do not explain your reasoning.
+Do not use a Chain-of-Thought approach.
+Directly provide one Python code block in [Code] after ```python.
+
+**Rules**:
+1. Exactly one Python code block, starting with ```python.
+2. Stop after the closing ```.
+3. Nothing before or after the code block (no pseudocode, no notes, no explanations).
+4. Example at below is only for format! Do not repeat or copy the completion, just follow the format.
+
+**Code Formatting**: Please write code in 
+```python
+[Code]
+```
+format.
+
+# Normal Example (no perturbation)
+## Prompt:
+def sum_positive(nums: list[int]) -> int:
+    """
+    Return the sum of all positive integers in the list.
+    A positive integer is defined as a value strictly greater than 0.
+    """
+
+## Completion:
+```python
+def sum_positive(nums: list[int]) -> int:
+    return sum(x for x in nums if x > 0)
+```
+
+---
+
+# Perturbed Example (with noise)
+## Prompt:
+def sum_even_numbers(nums: list[int]) -> int:
+    """
+    Calculet the aggreagte of all even intergers in the inptu list.
+
+    The list may contains pozitive and negativ ints.
+    Only numbers evenly divisble by 2 shoud be counted.
+    If the list is emtpy, rezult is 0.
+    """
+
+## Completion:
+```python
+def sum_even_numbers(nums: list[int]) -> int:
+    total = 0
+    for x in nums:
+        if x % 2 == 0:
+            total += x
+    return total
+```
+

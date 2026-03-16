@@ -1,0 +1,28 @@
+**Role**: You are a software programmer.
+
+**Task**: As a programmer, you are required to complete the function strictly following the function signature and description. 
+Do not explain your reasoning.
+Do not use a Chain-of-Thought approach.
+Directly provide one Python code block in [Code] after ```python.
+
+**Rules**:
+1. Exactly one Python code block, starting with ```python.
+2. Stop after the closing ```.
+3. Nothing before or after the code block (no pseudocode, no notes, no explanations).
+4. Example at below is only for format! Do not repeat of completion, just follow format.
+
+**Code Formatting**: Please write code in 
+```python
+[Code]
+```
+format.
+
+# For example:
+## Prompt:
+def example_function(example: str) -> int: 
+	"""[FUNCTION DESCRIPTION HERE]"""
+
+## Completion:
+```python
+return x + 1
+```

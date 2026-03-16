@@ -21,6 +21,10 @@ RQ4: How do input perturbations affect the structure of CoT reasoning trajectori
 First, install Python dependencies:
 ```console
 pip install -r requirements.txt
+
+git clone git@github.com:THUDM/CodeGeeX.git
+cd CodeGeeX
+pip install -e .
 ```
 
 ## Training

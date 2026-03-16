@@ -49,10 +49,3 @@ python print_results.py --eval_name starcoderbase-1b-safecoder-0.2 --eval_type m
 ## Datasets
 This dataset contains the unperturbed training dataset [`evol`](data_train_val/train/evol.jsonl) and 32 perturbed datasets is constructed within this work. (see [Section 4 in our paper] for more details).
 
-## Acknowledgements
-
-Our implimentation bases on or contains many references to following repositories:
-* [SafeCoder](https://github.com/eth-sri/SafeCoder)
-
-## Citation
-

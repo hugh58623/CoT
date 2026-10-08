@@ -11,6 +11,105 @@ from codegeex.benchmark.utils import IMPORT_HELPER
 from codegeex.benchmark.execution import check_correctness
 
 
+class PresencePenaltyLogitsProcessor:
+    """
+    Transformers-compatible presence penalty for generated tokens only.
+    Subtracts `penalty` once from logits of tokens that have already appeared
+    in the generated continuation. This lets us reproduce Qwen3.5's recommended
+    presence_penalty even though HF model.generate() does not expose the
+    OpenAI/vLLM-style argument directly.
+    """
+    def __init__(self, penalty: float, prompt_length: int):
+        self.penalty = float(penalty)
+        self.prompt_length = int(prompt_length)
+
+    def __call__(self, input_ids, scores):
+        if self.penalty == 0.0:
+            return scores
+
+        generated = input_ids[:, self.prompt_length:]
+        if generated.numel() == 0:
+            return scores
+
+        scores = scores.clone()
+        for batch_idx in range(generated.shape[0]):
+            seen_tokens = torch.unique(generated[batch_idx])
+            scores[batch_idx, seen_tokens] -= self.penalty
+        return scores
+
+
+def is_qwen35(model_path: str) -> bool:
+    p = model_path.lower().replace("_", "").replace("-", "")
+    return "qwen3.5" in model_path.lower() or "qwen35" in p
+
+
+def is_cot_tag(run_tag: str) -> bool:
+    """
+    Exact CoT detection. Important: checking `"cot" in "nocot"` is wrong.
+    """
+    if not run_tag:
+        return False
+    tag = run_tag.lower()
+    return (
+        tag == "cot"
+        or tag.endswith("_cot")
+        or tag.startswith("cot_")
+        or "_cot_" in tag
+    )
+
+
+def qwen35_sampling_config(thinking_enabled: bool):
+    """
+    Qwen3.5 official recommendations selected for this experiment.
+
+    Thinking ON: precise coding task configuration.
+    Thinking OFF: instruct/non-thinking general-task configuration.
+
+    Prompt CoT/NoCoT does NOT change these parameters. This is intentional:
+    it keeps prompt-induced CoT orthogonal to native thinking.
+    """
+    if thinking_enabled:
+        return {
+            "do_sample": True,
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 0.0,
+            "repetition_penalty": 1.0,
+        }
+    return {
+        "do_sample": True,
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repetition_penalty": 1.0,
+    }
+
+
+def build_qwen_text(tokenizer, messages, model_path: str, thinking_mode: str):
+    """
+    For Qwen3.5, control native reasoning with enable_thinking.
+    For older Qwen models, keep the original chat-template behavior.
+    """
+    if is_qwen35(model_path):
+        thinking_enabled = (thinking_mode == "thinking")
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=thinking_enabled,
+        )
+
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+
 class StopAfterOneCodeBlock(StoppingCriteria):
     def __init__(self, tokenizer):
         self.tk = tokenizer
@@ -35,14 +134,14 @@ def strip_code_fence(s: str) -> str:
     return s.strip()
 
 
-def fetch_completion_hf(sample, model, tokenizer, model_path, fewshot, times=10, topk=5, max_new_tokens=512, run_tag="nocot"):
+def fetch_completion_hf(sample, model, tokenizer, model_path, fewshot, times=10, topk=5, max_new_tokens=2048, run_tag="nocot", thinking_mode="nonthinking"):
     prompt_src = sample.get("prompt") or sample.get("complete_prompt") or ""
     if "qwen" in model_path.lower():
         messages = [
             {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
             {"role": "user", "content": f"{fewshot}\n\n{prompt_src}"}
         ]
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        text = build_qwen_text(tokenizer, messages, model_path, thinking_mode)
 
     elif "deepseek" in model_path.lower():
         messages = [
@@ -87,10 +186,40 @@ def fetch_completion_hf(sample, model, tokenizer, model_path, fewshot, times=10,
         stopping_criteria=stoppers,
         num_return_sequences=times,
     )
-    if run_tag and "cot" in run_tag.lower():
-        gen_kwargs.update(dict(do_sample=True, temperature=1.0, top_p=0.9))
+
+    # Qwen3.5: native thinking and prompt CoT are two independent factors.
+    if is_qwen35(model_path):
+        thinking_enabled = (thinking_mode == "thinking")
+        sampling = qwen35_sampling_config(thinking_enabled)
+
+        presence_penalty = sampling.pop("presence_penalty")
+        gen_kwargs.update(sampling)
+
+        # HF generate() has no OpenAI/vLLM-style presence_penalty parameter,
+        # so reproduce it with a logits processor.
+        if presence_penalty != 0.0:
+            gen_kwargs["logits_processor"] = [
+                PresencePenaltyLogitsProcessor(
+                    penalty=presence_penalty,
+                    prompt_length=inputs["input_ids"].shape[1],
+                )
+            ]
+
+        print(
+            f"[Qwen3.5] native_thinking={thinking_enabled} | "
+            f"prompt_mode={'cot' if is_cot_tag(run_tag) else 'nocot'} | "
+            f"T={gen_kwargs['temperature']} top_p={gen_kwargs['top_p']} "
+            f"top_k={gen_kwargs['top_k']} min_p={gen_kwargs['min_p']} "
+            f"presence_penalty={presence_penalty} "
+            f"repetition_penalty={gen_kwargs['repetition_penalty']}"
+        )
     else:
-        gen_kwargs.update(dict(do_sample=False, temperature=0.0))
+        # Preserve the previous behavior for non-Qwen3.5 models,
+        # but fix the old bug where "nocot" also matched substring "cot".
+        if is_cot_tag(run_tag):
+            gen_kwargs.update(dict(do_sample=True, temperature=1.0, top_p=0.9))
+        else:
+            gen_kwargs.update(dict(do_sample=False))
 
     outputs = model.generate(**inputs, **gen_kwargs)
     input_len = inputs["input_ids"].shape[1]
@@ -205,8 +334,15 @@ def main():
     parser.add_argument("--prompt_path", type=str, default="./prompts/mhpp_prompt_nocot.txt")
     parser.add_argument("--dataset_file", type=str, required=True)
     parser.add_argument("--run_tag", type=str, default=None)
+    parser.add_argument(
+        "--thinking_mode",
+        type=str,
+        choices=["thinking", "nonthinking"],
+        default="nonthinking",
+        help="Qwen3.5 native reasoning mode. Independent of the CoT/NoCoT prompt.",
+    )
     parser.add_argument("--times", type=int, default=10)
-    parser.add_argument("--max_new_tokens", type=int, default=512)
+    parser.add_argument("--max_new_tokens", type=int, default=2048)
     parser.add_argument("--topk_eval", type=int, nargs="+", default=[1, 5, 10])
     args = parser.parse_args()
 
@@ -215,10 +351,17 @@ def main():
     dataset_file = args.dataset_file
     run_tag = args.run_tag or os.path.splitext(os.path.basename(prompt_path))[0]
 
+    if is_qwen35(model_path):
+        prompt_mode = "cot" if is_cot_tag(run_tag) else "nocot"
+        experiment_tag = f"{args.thinking_mode}_{prompt_mode}"
+    else:
+        experiment_tag = run_tag
+
     print(f"Loading local model from: {model_path}")
+    print(f"Experiment tag: {experiment_tag}")
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     # model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto")
-    dtype = torch.bfloat16 if "gpt-oss" in model_path.lower() else torch.float16
+    dtype = torch.bfloat16 if ("gpt-oss" in model_path.lower() or is_qwen35(model_path)) else torch.float16
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=dtype,
@@ -238,7 +381,8 @@ def main():
     new_dataset = [None] * len(dataset)
     with ThreadPoolExecutor(max_workers=1) as executor:
         futures = {executor.submit(fetch_completion_hf, copy.deepcopy(dataset[i]), model, tokenizer, model_path,
-                                   construct_few_shot_prompt, args.times, 5, args.max_new_tokens, run_tag): i
+                                   construct_few_shot_prompt, args.times, 5, args.max_new_tokens, run_tag,
+                                   args.thinking_mode): i
                    for i in range(len(dataset))}
         for fut in concurrent.futures.as_completed(futures):
             i = futures[fut]
@@ -251,7 +395,7 @@ def main():
     os.makedirs("./dataset", exist_ok=True)
     model_name = os.path.basename(model_path.rstrip("/"))
     dataset_name = os.path.splitext(os.path.basename(dataset_file))[0]
-    prefix = f"{model_name}_{dataset_name}_python_{run_tag}"
+    prefix = f"{model_name}_{dataset_name}_python_{experiment_tag}"
 
     # 1) full data with logprobs
     with open(f"./dataset/{prefix}_raw.json", "w", encoding="utf-8") as f:

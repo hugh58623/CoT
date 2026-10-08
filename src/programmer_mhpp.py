@@ -21,24 +21,139 @@ from codegeex.benchmark.execution import check_correctness
 from transformers import StoppingCriteria, StoppingCriteriaList
 
 
+class PresencePenaltyLogitsProcessor:
+    """
+    Transformers-compatible presence penalty for generated tokens only.
+    Subtracts `penalty` once from logits of tokens that have already appeared
+    in the generated continuation. This lets us reproduce Qwen3.5's recommended
+    presence_penalty even though HF model.generate() does not expose the
+    OpenAI/vLLM-style argument directly.
+    """
+    def __init__(self, penalty: float, prompt_length: int):
+        self.penalty = float(penalty)
+        self.prompt_length = int(prompt_length)
+
+    def __call__(self, input_ids, scores):
+        if self.penalty == 0.0:
+            return scores
+
+        generated = input_ids[:, self.prompt_length:]
+        if generated.numel() == 0:
+            return scores
+
+        scores = scores.clone()
+        for batch_idx in range(generated.shape[0]):
+            seen_tokens = torch.unique(generated[batch_idx])
+            scores[batch_idx, seen_tokens] -= self.penalty
+        return scores
+
+
+def is_qwen35(model_path: str) -> bool:
+    p = model_path.lower().replace("_", "").replace("-", "")
+    return "qwen3.5" in model_path.lower() or "qwen35" in p
+
+
+def is_cot_tag(run_tag: str) -> bool:
+    """
+    Exact CoT detection. Important: checking `"cot" in "nocot"` is wrong.
+    """
+    if not run_tag:
+        return False
+    tag = run_tag.lower()
+    return (
+        tag == "cot"
+        or tag.endswith("_cot")
+        or tag.startswith("cot_")
+        or "_cot_" in tag
+    )
+
+
+def qwen35_sampling_config(thinking_enabled: bool):
+    """
+    Qwen3.5 official recommendations selected for this experiment.
+
+    Thinking ON: precise coding task configuration.
+    Thinking OFF: instruct/non-thinking general-task configuration.
+
+    Prompt CoT/NoCoT does NOT change these parameters. This is intentional:
+    it keeps prompt-induced CoT orthogonal to native thinking.
+    """
+    if thinking_enabled:
+        return {
+            "do_sample": True,
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 0.0,
+            "repetition_penalty": 1.0,
+        }
+    return {
+        "do_sample": True,
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repetition_penalty": 1.0,
+    }
+
+
+def build_qwen_text(tokenizer, messages, model_path: str, thinking_mode: str):
+    """
+    For Qwen3.5, control native reasoning with enable_thinking.
+    For older Qwen models, keep the original chat-template behavior.
+    """
+    if is_qwen35(model_path):
+        thinking_enabled = (thinking_mode == "thinking")
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=thinking_enabled,
+        )
+
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+
 # ============== 参数设置 ==============
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_path", type=str, required=True)
 parser.add_argument("--prompt_path", type=str, default="./prompts/mhpp_prompt_nocot.txt")
 parser.add_argument("--dataset_file", type=str, default="./src/dataset/MHPP_C1.jsonl")
 parser.add_argument("--run_tag", type=str, default=None)
+parser.add_argument(
+    "--thinking_mode",
+    type=str,
+    choices=["thinking", "nonthinking"],
+    default="nonthinking",
+    help="Qwen3.5 native reasoning mode. Independent of the CoT/NoCoT prompt.",
+)
+parser.add_argument("--max_new_tokens", type=int, default=2048)
 args = parser.parse_args()
 
 MODEL_PATH = args.model_path
 PROMPT_PATH = args.prompt_path
 DATASET_FILE = args.dataset_file
 RUN_TAG = args.run_tag or os.path.splitext(os.path.basename(PROMPT_PATH))[0]
+THINKING_MODE = args.thinking_mode
+
+if is_qwen35(MODEL_PATH):
+    PROMPT_MODE = "cot" if is_cot_tag(RUN_TAG) else "nocot"
+    EXPERIMENT_TAG = f"{THINKING_MODE}_{PROMPT_MODE}"
+else:
+    EXPERIMENT_TAG = RUN_TAG
 
 print(f"Loading local model from: {MODEL_PATH}")
+print(f"Experiment tag: {EXPERIMENT_TAG}")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 # model = AutoModelForCausalLM.from_pretrained(MODEL_PATH, torch_dtype=torch.float16, device_map="auto")
 
-dtype = torch.bfloat16 if "gpt-oss" in MODEL_PATH.lower() else torch.float16
+dtype = torch.bfloat16 if ("gpt-oss" in MODEL_PATH.lower() or is_qwen35(MODEL_PATH)) else torch.float16
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_PATH,
     torch_dtype=dtype,
@@ -125,13 +240,17 @@ class StopAfterOneCodeBlock(StoppingCriteria):
 
 
 def preprocess_data(completion_string):
+    """
+    Extract Python code if a fenced code block exists.
+    If the model returns plain Python without Markdown fences, preserve it.
+    """
     if "```python" in completion_string:
         completion_string = completion_string.split("```python", 1)[1]
         completion_string = completion_string.split("```", 1)[0]
-        return completion_string.strip()
-    else:
-        print("Error: No code block found")
-        return ""
+    elif "```" in completion_string:
+        completion_string = completion_string.split("```", 1)[1]
+        completion_string = completion_string.split("```", 1)[0]
+    return completion_string.strip()
 
 
 # def fetch_completion_hf(data_entry, lg, times=10, topk=5):
@@ -181,7 +300,7 @@ def preprocess_data(completion_string):
 #     stoppers = StoppingCriteriaList([StopAfterOneCodeBlock(tokenizer)])
 #
 #     gen_kwargs = {
-#         "max_new_tokens": 1024,
+#         "max_new_tokens": args.max_new_tokens,
 #         "return_dict_in_generate": True,
 #         "output_scores": True,
 #         "stopping_criteria": stoppers,
@@ -314,20 +433,21 @@ def fetch_completion_hf(data_entry, lg, times=10, topk=5):
             {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
             {"role": "user", "content": f"{construct_few_shot_prompt}\n\n{prompt}"}
         ]
-        text = tokenizer.apply_chat_template(
+        text = build_qwen_text(
+            tokenizer,
             messages,
-            tokenize=False,
-            add_generation_prompt=True
+            MODEL_PATH,
+            THINKING_MODE,
         )
 
-    elif "deepseek" in model_path.lower():
+    elif "deepseek" in MODEL_PATH.lower():
         messages = [
             {"role": "system", "content": "You are a helpful coding assistant."},
             {"role": "user", "content": f"{construct_few_shot_prompt}\n\n{prompt}"}
         ]
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-    elif "codellama" in model_path.lower():
+    elif "codellama" in MODEL_PATH.lower():
         messages = [
             {"role": "system", "content": "You are a helpful coding assistant."},
             {"role": "user", "content": f"{construct_few_shot_prompt}\n\n{prompt}"}
@@ -339,7 +459,7 @@ def fetch_completion_hf(data_entry, lg, times=10, topk=5):
         )
 
 
-    elif "gpt" in model_path.lower():
+    elif "gpt" in MODEL_PATH.lower():
         # Decide reasoning level based on run_tag
         if RUN_TAG.lower() == "cot":
             reasoning_level = "medium"
@@ -373,25 +493,52 @@ def fetch_completion_hf(data_entry, lg, times=10, topk=5):
     stoppers = StoppingCriteriaList([StopAfterOneCodeBlock(tokenizer)])
 
     gen_kwargs = {
-        "max_new_tokens": 1024,
+        "max_new_tokens": args.max_new_tokens,
         "return_dict_in_generate": True,
         "output_scores": True,
         "stopping_criteria": stoppers,
         "num_return_sequences": times,
     }
 
-    # 是否采样（cot 情况启用采样，nocot 用 greedy）
-    if RUN_TAG and "cot" in RUN_TAG.lower():
-        gen_kwargs.update({
-            "do_sample": True,
-            "temperature": 0.5,
-            "top_p": 0.9
-        })
+    # Qwen3.5: native thinking and prompt CoT are two independent factors.
+    if is_qwen35(MODEL_PATH):
+        thinking_enabled = (THINKING_MODE == "thinking")
+        sampling = qwen35_sampling_config(thinking_enabled)
+
+        presence_penalty = sampling.pop("presence_penalty")
+        gen_kwargs.update(sampling)
+
+        # HF generate() has no OpenAI/vLLM-style presence_penalty parameter,
+        # so reproduce it with a logits processor.
+        if presence_penalty != 0.0:
+            gen_kwargs["logits_processor"] = [
+                PresencePenaltyLogitsProcessor(
+                    penalty=presence_penalty,
+                    prompt_length=inputs["input_ids"].shape[1],
+                )
+            ]
+
+        print(
+            f"[Qwen3.5] native_thinking={thinking_enabled} | "
+            f"prompt_mode={'cot' if is_cot_tag(RUN_TAG) else 'nocot'} | "
+            f"T={gen_kwargs['temperature']} top_p={gen_kwargs['top_p']} "
+            f"top_k={gen_kwargs['top_k']} min_p={gen_kwargs['min_p']} "
+            f"presence_penalty={presence_penalty} "
+            f"repetition_penalty={gen_kwargs['repetition_penalty']}"
+        )
     else:
-        gen_kwargs.update({
-            "do_sample": False,
-            "temperature": 0.0
-        })
+        # Preserve previous behavior for non-Qwen3.5 models,
+        # while fixing the old "nocot" contains "cot" bug.
+        if is_cot_tag(RUN_TAG):
+            gen_kwargs.update({
+                "do_sample": True,
+                "temperature": 0.5,
+                "top_p": 0.9
+            })
+        else:
+            gen_kwargs.update({
+                "do_sample": False
+            })
 
     # ===== 执行生成 =====
     outputs = model.generate(**inputs, **gen_kwargs)
@@ -666,7 +813,7 @@ if __name__ == "__main__":
 
             os.makedirs("./dataset", exist_ok=True)
 
-            prefix = f"{model_name}_{dataset_name}_{lg}_{RUN_TAG}"
+            prefix = f"{model_name}_{dataset_name}_{lg}_{EXPERIMENT_TAG}"
 
             with open(f"./dataset/{prefix}_raw.json", "w", encoding="utf-8") as f:
                 json.dump(dataset, f, indent=4, ensure_ascii=False)
